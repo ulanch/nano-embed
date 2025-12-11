@@ -3,11 +3,46 @@ from collections import deque
 import torch
 import pyarrow.parquet as pq
 
-from nanochat.common import get_dist_info
-from nanochat.dataset import list_parquet_files
-from nanochat.tokenizer import get_tokenizer
+from nano_embed.common import get_dist_info
+from nano_embed.dataset import list_parquet_files
+from nano_embed.tokenizer import get_tokenizer
 
-def tokenizing_distributed_data_loader_with_state(B, T, split, tokenizer_threads=4, tokenizer_batch_size=128, device="cuda", resume_state_dict=None):
+def mask_tokens(tokens, mask_ratio, vocab_size, mask_token_id):
+    """
+    Masks tokens in a 1D tensor for Masked Next Token Prediction (MNTP).
+    
+    Args:
+        tokens (torch.Tensor): A 1D tensor of token IDs.
+        mask_ratio (float): The probability of masking a token.
+        vocab_size (int): The size of the vocabulary, used for random token replacement.
+        mask_token_id (int): The ID of the special MASK token.
+        
+    Returns:
+        tuple: A tuple containing:
+            - inputs (torch.Tensor): The token IDs with some tokens masked.
+            - targets (torch.Tensor): The original token IDs for masked positions, and -100 elsewhere.
+    """
+    labels = tokens.clone()
+    probability_matrix = torch.full(labels.shape, mask_ratio)
+    masked_indices = torch.bernoulli(probability_matrix).bool()
+    
+    # 80% of the time, replace masked input tokens with [MASK] token
+    indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+    tokens[indices_replaced] = mask_token_id
+    
+    # 10% of the time, replace masked input tokens with random word
+    indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+    random_words = torch.randint(vocab_size, labels.shape, dtype=torch.long, device=tokens.device)
+    tokens[indices_random] = random_words[indices_random]
+    
+    # The rest of the 10% of the time, keep the masked input tokens unchanged
+    
+    # Set labels to -100 (ignore_index) for all unmasked tokens
+    labels[~masked_indices] = -100 # -100 is the default ignore_index for F.cross_entropy
+    
+    return tokens, labels
+
+def tokenizing_distributed_data_loader_with_state(B, T, split, tokenizer_threads=4, tokenizer_batch_size=128, device="cuda", resume_state_dict=None, mask_ratio=0.0):
     """
     Stream pretraining text from parquet files, tokenize, yield training batches.
 
@@ -60,10 +95,15 @@ def tokenizing_distributed_data_loader_with_state(B, T, split, tokenizer_threads
     batches = document_batches()
 
     # Now emit batches of tokens.
-    needed_tokens = B * T + 1 # +1 is because we also need the target at the last token
-    # get the tokenizer and the bos token
+    # The MNTP objective only requires a single special MASK token.
+    # The default tokenizer already has a [MASK] token.
     tokenizer = get_tokenizer()
     bos_token = tokenizer.get_bos_token_id()
+    mask_token_id = tokenizer.get_mask_token_id()
+    vocab_size = tokenizer.get_vocab_size()
+
+    needed_tokens = B * T + 1 # +1 is because we also need the target at the last token
+
     # scratch buffer holds the tokens for one iteration
     token_buffer = deque() # we stream tokens on the right and pop from the left
     while True:
@@ -78,16 +118,24 @@ def tokenizing_distributed_data_loader_with_state(B, T, split, tokenizer_threads
         # CUDA supports memory pinning for asynchronous transfers between CPU and GPU
         use_cuda_optimizations = device == "cuda"
         scratch = torch.tensor(tokens, dtype=torch.long, pin_memory=use_cuda_optimizations) # in PyTorch, long=int64
-        # Create the inputs/targets as 1D tensors
-        inputs_cpu = scratch[:-1]
-        targets_cpu = scratch[1:]
+        
+        # Apply masking if mask_ratio is greater than 0
+        if mask_ratio > 0.0:
+            inputs_masked, targets_masked = mask_tokens(scratch[:-1].clone(), mask_ratio, vocab_size, mask_token_id)
+            inputs_cpu = inputs_masked
+            targets_cpu = targets_masked
+        else:
+            inputs_cpu = scratch[:-1]
+            targets_cpu = scratch[1:]
+
         # Reshape to 2D and move to GPU async
         inputs = inputs_cpu.view(B, T).to(device=device, non_blocking=use_cuda_optimizations)
         targets = targets_cpu.view(B, T).to(device=device, non_blocking=use_cuda_optimizations)
         state_dict = {"pq_idx": pq_idx, "rg_idx": rg_idx} # we need this in case we wish to approximately resume training
         yield inputs, targets, state_dict
 
-def tokenizing_distributed_data_loader(*args, **kwargs):
+def tokenizing_distributed_data_loader(*args, mask_ratio=0.0, **kwargs):
     # helper function that only emits the inputs/targets and not the state_dict
-    for inputs, targets, state_dict in tokenizing_distributed_data_loader_with_state(*args, **kwargs):
+    for inputs, targets, state_dict in tokenizing_distributed_data_loader_with_state(*args, mask_ratio=mask_ratio, **kwargs):
         yield inputs, targets
+

@@ -1,7 +1,7 @@
 [project]
-name = "nanochat"
+name = "nano-embed"
 version = "0.1.0"
-description = "the minimal full-stack ChatGPT clone"
+description = "the minimal full-stack embedding model"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,6 +16,11 @@ dependencies = [
     "torch>=2.8.0",
     "uvicorn>=0.36.0",
     "wandb>=0.21.3",
+    "scikit-learn>=1.0.0",
+    "requests",
+    "mteb",
+    "tqdm",
+    "pyarrow",
 ]
 
 [build-system]
@@ -25,7 +30,7 @@ build-backend = "maturin"
 [tool.maturin]
 module-name = "rustbpe"
 bindings = "pyo3"
-python-source = "."
+python-source = "nano_embed"
 manifest-path = "rustbpe/Cargo.toml"
 
 [dependency-groups]

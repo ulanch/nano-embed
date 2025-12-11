@@ -19,9 +19,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from nanochat.common import get_dist_info, print0
-from nanochat.muon import Muon, DistMuon
-from nanochat.adamw import DistAdamW
+from nano_embed.common import get_dist_info, print0
+from nano_embed.muon import Muon, DistMuon
+from nano_embed.adamw import DistAdamW
+from nano_embed.lora import LoRALinear
 
 @dataclass
 class GPTConfig:
@@ -31,6 +32,11 @@ class GPTConfig:
     n_head: int = 6 # number of query heads
     n_kv_head: int = 6 # number of key/value heads (GQA)
     n_embd: int = 768
+    bidirectional: bool = False
+    use_lora: bool = False
+    lora_rank: int = 4
+    lora_alpha: int = 32
+    lora_dropout: float = 0.0
 
 
 def norm(x):
@@ -48,9 +54,10 @@ def apply_rotary_emb(x, cos, sin):
     out = out.to(x.dtype) # ensure input/output dtypes match
     return out
 
-class CausalSelfAttention(nn.Module):
+class SelfAttention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
+        self.config = config
         self.layer_idx = layer_idx
         self.n_head = config.n_head
         self.n_kv_head = config.n_kv_head
@@ -58,10 +65,16 @@ class CausalSelfAttention(nn.Module):
         self.head_dim = self.n_embd // self.n_head
         assert self.n_embd % self.n_head == 0
         assert self.n_kv_head <= self.n_head and self.n_head % self.n_kv_head == 0
-        self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
-        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        if self.config.use_lora:
+            self.c_q = LoRALinear(nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False), self.config.lora_rank, self.config.lora_alpha)
+            self.c_k = LoRALinear(nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False), self.config.lora_rank, self.config.lora_alpha)
+            self.c_v = LoRALinear(nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False), self.config.lora_rank, self.config.lora_alpha)
+            self.c_proj = LoRALinear(nn.Linear(self.n_embd, self.n_embd, bias=False), self.config.lora_rank, self.config.lora_alpha)
+        else:
+            self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
+            self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
+            self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
+            self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
 
     def forward(self, x, cos_sin, kv_cache):
         B, T, C = x.size()
@@ -85,7 +98,10 @@ class CausalSelfAttention(nn.Module):
 
         # Attention: queries attend to keys/values autoregressively. A few cases to handle:
         enable_gqa = self.n_head != self.n_kv_head # Group Query Attention (GQA): duplicate key/value heads to match query heads if desired
-        if kv_cache is None or Tq == Tk:
+        if self.config.bidirectional:
+            # if the model is bidirectional, we don't need to worry about causal masking
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
+        elif kv_cache is None or Tq == Tk:
             # During training (no KV cache), attend as usual with causal attention
             # And even if there is KV cache, we can still use this simple version when Tq == Tk
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=enable_gqa)
@@ -112,8 +128,12 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+        if config.use_lora:
+            self.c_fc = LoRALinear(nn.Linear(config.n_embd, 4 * config.n_embd, bias=False), config.lora_rank, config.lora_alpha)
+            self.c_proj = LoRALinear(nn.Linear(4 * config.n_embd, config.n_embd, bias=False), config.lora_rank, config.lora_alpha)
+        else:
+            self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
+            self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
 
     def forward(self, x):
         x = self.c_fc(x)
@@ -125,7 +145,7 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
-        self.attn = CausalSelfAttention(config, layer_idx)
+        self.attn = SelfAttention(config, layer_idx)
         self.mlp = MLP(config)
 
     def forward(self, x, cos_sin, kv_cache):
@@ -142,7 +162,10 @@ class GPT(nn.Module):
             "wte": nn.Embedding(config.vocab_size, config.n_embd),
             "h": nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layer)]),
         })
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        if config.use_lora:
+            self.lm_head = LoRALinear(nn.Linear(config.n_embd, config.vocab_size, bias=False), config.lora_rank, config.lora_alpha)
+        else:
+            self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # To support meta device initialization, we init the rotary embeddings here, but it's fake
         # As for rotary_seq_len, these rotary embeddings are pretty small/cheap in memory,
         # so let's just over-compute them, but assert fail if we ever reach that amount.
@@ -212,20 +235,50 @@ class GPT(nn.Module):
     def setup_optimizers(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0):
         model_dim = self.config.n_embd
         ddp, rank, local_rank, world_size = get_dist_info()
-        # Separate out all parameters into 3 groups (matrix, embedding, lm_head)
-        matrix_params = list(self.transformer.h.parameters())
-        embedding_params = list(self.transformer.wte.parameters())
-        lm_head_params = list(self.lm_head.parameters())
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params)
-        # Create the AdamW optimizer for the embedding and lm_head
+
+        # Collect parameters based on whether LoRA is used
+        if self.config.use_lora:
+            # When using LoRA, we only train the LoRA parameters, embedding, and lm_head (if not LoRA-wrapped)
+            lora_params = []
+            for n, p in self.named_parameters():
+                if "lora_a" in n or "lora_b" in n:
+                    lora_params.append(p)
+            embedding_params = list(self.transformer.wte.parameters())
+            lm_head_params = []
+            if isinstance(self.lm_head, nn.Linear): # if lm_head is not LoRA-wrapped
+                lm_head_params = list(self.lm_head.parameters())
+            
+            # Combine all LoRA parameters to be optimized by Muon
+            matrix_params = lora_params
+            
+            # AdamW will optimize embedding and (optionally) non-LoRA lm_head
+            adam_groups = []
+            if len(lm_head_params) > 0:
+                adam_groups.append(dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale))
+            adam_groups.append(dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale))
+            
+            # Print for debugging
+            if rank == 0:
+                print(f"LoRA enabled. Training {len(lora_params)} LoRA parameters, {len(embedding_params)} embedding parameters, and {len(lm_head_params)} lm_head parameters.")
+                
+        else:
+            # Original parameter separation logic
+            matrix_params = list(self.transformer.h.parameters())
+            embedding_params = list(self.transformer.wte.parameters())
+            lm_head_params = list(self.lm_head.parameters())
+            
+            assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params)
+            
+            adam_groups = [
+                dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
+                dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale),
+            ]
+
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (having tuned the LRs for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
         if rank == 0:
             print(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
-        adam_groups = [
-            dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
-            dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale),
-        ]
+
         adamw_kwargs = dict(betas=(0.8, 0.95), eps=1e-10, weight_decay=weight_decay)
         AdamWFactory = DistAdamW if ddp else partial(torch.optim.AdamW, fused=True)
         adamw_optimizer = AdamWFactory(adam_groups, **adamw_kwargs)
@@ -240,7 +293,7 @@ class GPT(nn.Module):
                 group["initial_lr"] = group["lr"]
         return optimizers
 
-    def forward(self, idx, targets=None, kv_cache=None, loss_reduction='mean'):
+    def forward(self, idx, targets=None, kv_cache=None, loss_reduction='mean', return_embeddings=False, is_mntp=False):
         B, T = idx.size()
 
         # Grab the rotary embeddings for the current sequence length (they are of shape (1, seq_len, 1, head_dim/2))
@@ -258,6 +311,9 @@ class GPT(nn.Module):
             x = block(x, cos_sin, kv_cache)
         x = norm(x)
 
+        if return_embeddings:
+            return x # Return the hidden states for embedding tasks
+
         # Forward the lm_head (compute logits)
         softcap = 15 # smoothly cap the logits to the range [-softcap, softcap]
         logits = self.lm_head(x) # (B, T, vocab_size) <- very big tensor, large amount of memory
@@ -265,9 +321,12 @@ class GPT(nn.Module):
         logits = softcap * torch.tanh(logits / softcap) # squash the logits
 
         if targets is not None:
-            # training: given the targets, compute and return the loss
-            # TODO experiment with chunked cross-entropy?
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction=loss_reduction)
+            if is_mntp:
+                # For MNTP, predict token i using representation at i-1
+                # Shift logits to the left and targets to the right
+                loss = F.cross_entropy(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), targets[:, 1:].contiguous().view(-1), ignore_index=-1, reduction=loss_reduction)
+            else:
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction=loss_reduction)
             return loss
         else:
             # inference: just return the logits directly
