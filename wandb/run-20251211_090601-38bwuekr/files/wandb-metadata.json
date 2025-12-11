@@ -1,0 +1,45 @@
+{
+  "os": "Linux-6.8.0-1040-nvidia-x86_64-with-glibc2.35",
+  "python": "CPython 3.10.12",
+  "startedAt": "2025-12-11T09:06:01.802199Z",
+  "args": [
+    "--depth=34",
+    "--run=",
+    "--bidirectional=True",
+    "--use_lora=True",
+    "--mask_ratio=0.15"
+  ],
+  "program": "-m scripts.base_train_mntp",
+  "git": {
+    "remote": "https://github.com/ulanch/nano-embed.git",
+    "commit": "d655638c980d7b071d76dc47859f008ebec10a2d"
+  },
+  "email": "alexander.ulanch@colorado.edu",
+  "root": "/home/ubuntu/nano-embed",
+  "host": "192-9-128-225",
+  "executable": "/home/ubuntu/nano-embed/.venv/bin/python3",
+  "cpu_count": 30,
+  "cpu_count_logical": 30,
+  "gpu": "NVIDIA A10",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "1456701079552",
+      "used": "45165629440"
+    }
+  },
+  "memory": {
+    "total": "238546460672"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA A10",
+      "memoryTotal": "24146608128",
+      "cudaCores": 9216,
+      "architecture": "Ampere",
+      "uuid": "GPU-24de0669-284a-5dd3-1396-22bc8c269d9c"
+    }
+  ],
+  "cudaVersion": "12.8",
+  "writerId": "dxrhmjvuddebl4cw6m21tf4x5vb4kbgu"
+}

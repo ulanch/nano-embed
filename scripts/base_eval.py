@@ -22,10 +22,10 @@ from contextlib import nullcontext
 
 import torch
 
-from nanochat.common import compute_init, compute_cleanup, print0, get_base_dir, autodetect_device_type, download_file_with_lock
-from nanochat.tokenizer import HuggingFaceTokenizer
-from nanochat.checkpoint_manager import load_model
-from nanochat.core_eval import evaluate_task
+from nano_embed.common import compute_init, compute_cleanup, print0, get_base_dir, autodetect_device_type, download_file_with_lock
+from nano_embed.tokenizer import HuggingFaceTokenizer
+from nano_embed.checkpoint_manager import load_model
+from nano_embed.core_eval import evaluate_task
 
 # -----------------------------------------------------------------------------
 # nanochat specific function dealing with I/O etc.

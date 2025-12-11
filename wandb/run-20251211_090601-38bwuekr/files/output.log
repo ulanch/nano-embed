@@ -1,0 +1,45 @@
+Vocab size: 65,536
+num_layers: 34
+model_dim: 2176
+num_heads: 17
+num_kv_heads: 17
+Tokens / micro-batch / rank: 32 x 2048 = 65,536
+Tokens / micro-batch: 65,536
+Total batch size 524,288 => gradient accumulation steps: 8
+Number of parameters: 2,222,680,576
+Estimated FLOPs per token: 1.429868e+10
+Calculated number of iterations from target data:param ratio: 84,788
+Total number of training tokens: 44,453,330,944
+Tokens : Params ratio: 20.00
+Total training FLOPs estimate: 6.356238e+20
+Scaling the LR for the AdamW parameters ∝1/√(2176/768) = 0.594089
+LoRA enabled. Training 410 LoRA parameters, 1 embedding parameters, and 0 lm_head parameters.
+Muon: Grouping 170 params of shape torch.Size([4, 2176]), device cuda:0, dtype torch.float32
+Muon: Grouping 34 params of shape torch.Size([4, 8704]), device cuda:0, dtype torch.float32
+Muon: Grouping 1 params of shape torch.Size([4, 65536]), device cuda:0, dtype torch.float32
+Muon: Grouping 171 params of shape torch.Size([2176, 4]), device cuda:0, dtype torch.float32
+Muon: Grouping 34 params of shape torch.Size([8704, 4]), device cuda:0, dtype torch.float32
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 193, in <module>
+    x, y, dataloader_state_dict = next(train_loader) # kick off load of the very first batch of data
+  File "/home/ubuntu/nano-embed/nano_embed/dataloader.py", line 149, in tokenizing_distributed_data_loader_with_state
+    doc_batch, (pq_idx, rg_idx) = next(batches)
+  File "/home/ubuntu/nano-embed/nano_embed/dataloader.py", line 97, in document_batches
+    while pq_idx < len(parquet_paths):  # iterate over all parquet files
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+[rank0]:     return _run_code(code, main_globals, None,
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+[rank0]:     exec(code, run_globals)
+[rank0]:   File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 193, in <module>
+[rank0]:     x, y, dataloader_state_dict = next(train_loader) # kick off load of the very first batch of data
+[rank0]:   File "/home/ubuntu/nano-embed/nano_embed/dataloader.py", line 149, in tokenizing_distributed_data_loader_with_state
+[rank0]:     doc_batch, (pq_idx, rg_idx) = next(batches)
+[rank0]:   File "/home/ubuntu/nano-embed/nano_embed/dataloader.py", line 97, in document_batches
+[rank0]:     while pq_idx < len(parquet_paths):  # iterate over all parquet files
+[rank0]: KeyboardInterrupt

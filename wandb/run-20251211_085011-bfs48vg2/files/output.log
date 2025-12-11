@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 89, in <module>
+    tokenizer = get_tokenizer()
+  File "/home/ubuntu/nano-embed/nano_embed/tokenizer.py", line 429, in get_tokenizer
+    from nanochat.common import get_base_dir
+ModuleNotFoundError: No module named 'nanochat'
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+[rank0]:     return _run_code(code, main_globals, None,
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+[rank0]:     exec(code, run_globals)
+[rank0]:   File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 89, in <module>
+[rank0]:     tokenizer = get_tokenizer()
+[rank0]:   File "/home/ubuntu/nano-embed/nano_embed/tokenizer.py", line 429, in get_tokenizer
+[rank0]:     from nanochat.common import get_base_dir
+[rank0]: ModuleNotFoundError: No module named 'nanochat'

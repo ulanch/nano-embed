@@ -179,11 +179,20 @@ class GPT(nn.Module):
     def init_weights(self):
         self.apply(self._init_weights)
         # zero out classifier weights
-        torch.nn.init.zeros_(self.lm_head.weight)
+        if isinstance(self.lm_head, LoRALinear):
+            torch.nn.init.zeros_(self.lm_head.linear.weight)
+        else:
+            torch.nn.init.zeros_(self.lm_head.weight)
         # zero out c_proj weights in all blocks
         for block in self.transformer.h:
-            torch.nn.init.zeros_(block.mlp.c_proj.weight)
-            torch.nn.init.zeros_(block.attn.c_proj.weight)
+            if isinstance(block.mlp.c_proj, LoRALinear):
+                torch.nn.init.zeros_(block.mlp.c_proj.linear.weight)
+            else:
+                torch.nn.init.zeros_(block.mlp.c_proj.weight)
+            if isinstance(block.attn.c_proj, LoRALinear):
+                torch.nn.init.zeros_(block.attn.c_proj.linear.weight)
+            else:
+                torch.nn.init.zeros_(block.attn.c_proj.weight)
         # init the rotary embeddings
         head_dim = self.config.n_embd // self.config.n_head
         cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
@@ -236,6 +245,11 @@ class GPT(nn.Module):
         model_dim = self.config.n_embd
         ddp, rank, local_rank, world_size = get_dist_info()
 
+        # Scale the LR for the AdamW parameters by ∝1/√dmodel (having tuned the LRs for 768 dim model)
+        dmodel_lr_scale = (model_dim / 768) ** -0.5
+        if rank == 0:
+            print(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
+
         # Collect parameters based on whether LoRA is used
         if self.config.use_lora:
             # When using LoRA, we only train the LoRA parameters, embedding, and lm_head (if not LoRA-wrapped)
@@ -273,11 +287,6 @@ class GPT(nn.Module):
                 dict(params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale),
                 dict(params=embedding_params, lr=embedding_lr * dmodel_lr_scale),
             ]
-
-        # Scale the LR for the AdamW parameters by ∝1/√dmodel (having tuned the LRs for 768 dim model)
-        dmodel_lr_scale = (model_dim / 768) ** -0.5
-        if rank == 0:
-            print(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
 
         adamw_kwargs = dict(betas=(0.8, 0.95), eps=1e-10, weight_decay=weight_decay)
         AdamWFactory = DistAdamW if ddp else partial(torch.optim.AdamW, fused=True)

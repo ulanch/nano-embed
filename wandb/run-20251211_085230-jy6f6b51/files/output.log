@@ -1,0 +1,32 @@
+Vocab size: 65,536
+num_layers: 34
+model_dim: 2176
+num_heads: 17
+num_kv_heads: 17
+Tokens / micro-batch / rank: 32 x 2048 = 65,536
+Tokens / micro-batch: 65,536
+Total batch size 524,288 => gradient accumulation steps: 8
+Traceback (most recent call last):
+  File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 135, in <module>
+    model.init_weights()
+  File "/home/ubuntu/nano-embed/nano_embed/gpt.py", line 182, in init_weights
+    torch.nn.init.zeros_(self.lm_head.weight)
+  File "/home/ubuntu/nano-embed/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1962, in __getattr__
+    raise AttributeError(
+AttributeError: 'LoRALinear' object has no attribute 'weight'
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+[rank0]:     return _run_code(code, main_globals, None,
+[rank0]:   File "/usr/lib/python3.10/runpy.py", line 86, in _run_code
+[rank0]:     exec(code, run_globals)
+[rank0]:   File "/home/ubuntu/nano-embed/scripts/base_train_mntp.py", line 135, in <module>
+[rank0]:     model.init_weights()
+[rank0]:   File "/home/ubuntu/nano-embed/nano_embed/gpt.py", line 182, in init_weights
+[rank0]:     torch.nn.init.zeros_(self.lm_head.weight)
+[rank0]:   File "/home/ubuntu/nano-embed/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1962, in __getattr__
+[rank0]:     raise AttributeError(
+[rank0]: AttributeError: 'LoRALinear' object has no attribute 'weight'

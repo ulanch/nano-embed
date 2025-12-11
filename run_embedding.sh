@@ -73,7 +73,18 @@ python -m nano_embed.report reset
 # Embedding Model Training (Stage 1: MNTP)
 
 # Number of processes/GPUs to use
-NPROC_PER_NODE=8
+# Dynamically determine NPROC_PER_NODE based on available GPUs
+if python -c "import torch; print(torch.cuda.is_available())" | grep -q True; then
+    NPROC_PER_NODE=$(python -c "import torch; print(torch.cuda.device_count())")
+else
+    NPROC_PER_NODE=1 # Default to 1 if no CUDA devices or CUDA not available
+fi
+
+if [ "$NPROC_PER_NODE" -eq 0 ]; then
+    echo "No CUDA devices found. Running on CPU (NPROC_PER_NODE=1)."
+    NPROC_PER_NODE=1
+fi
+echo "NPROC_PER_NODE set to $NPROC_PER_NODE"
 
 # Train the model with Masked Next Token Prediction
 torchrun --standalone --nproc_per_node=$NPROC_PER_NODE -m scripts.base_train_mntp -- --depth=34 --run=$WANDB_RUN --bidirectional=True --use_lora=True --mask_ratio=0.15
