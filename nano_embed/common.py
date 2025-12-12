@@ -190,11 +190,16 @@ def compute_init(device_type="cuda"):  # cuda|cpu|mps
 
     # Distributed setup: Distributed Data Parallel (DDP), optional, and requires CUDA
     ddp, ddp_rank, ddp_local_rank, ddp_world_size = get_dist_info()
+    print(f"[{os.getpid()}] compute_init: ddp={ddp}, ddp_rank={ddp_rank}, ddp_local_rank={ddp_local_rank}, ddp_world_size={ddp_world_size}")
+
     if ddp and device_type == "cuda":
         torch.cuda.set_device(ddp_local_rank) # make "cuda" default to this device
-        dist.init_process_group(backend="nccl", rank=ddp_rank, world_size=ddp_world_size) # device_id is automatically inferred from set_device
+        print(f"[{os.getpid()}] compute_init: Set device to {ddp_local_rank}")
+        dist.init_process_group(backend="nccl")
+        print(f"[{os.getpid()}] compute_init: Process group initialized")
         device = torch.device("cuda", ddp_local_rank)
         dist.barrier()
+        print(f"[{os.getpid()}] compute_init: Barrier passed")
     else:
         device = torch.device(device_type)  # mps|cpu
 

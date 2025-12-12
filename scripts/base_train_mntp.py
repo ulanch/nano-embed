@@ -25,6 +25,7 @@ from nano_embed.checkpoint_manager import save_checkpoint, load_checkpoint
 from nano_embed.loss_eval import evaluate_bpb
 from nano_embed.engine import Engine
 from scripts.base_eval import evaluate_model
+import torch
 print_banner()
 
 # -----------------------------------------------------------------------------
@@ -42,6 +43,8 @@ lora_alpha = 32 # LoRA alpha
 lora_dropout = 0.0 # LoRA dropout
 # MNTP specific
 mask_ratio = 0.15 # probability of masking a token
+# Optional: load pretrained base weights directory (containing model_*.pt/meta_*.json)
+load_from_base_dir = ""
 
 # Training horizon. Only one of these 3 will be used, in this order of precedence.
 num_iterations = -1 # explicit number of steps of the optimization (-1 = disable)
@@ -133,6 +136,28 @@ with torch.device("meta"):
     model = GPT(model_config)
 model.to_empty(device=device)
 model.init_weights()
+
+# Optionally load pretrained base model weights before MNTP (strict=False to ignore LoRA params)
+if load_from_base_dir:
+    checkpoint_files = [f for f in os.listdir(load_from_base_dir) if f.startswith("model_") and f.endswith('.pt')]
+    if not checkpoint_files:
+        raise ValueError(f"No checkpoint files found in {load_from_base_dir}")
+    latest_checkpoint = ""
+    max_step = -1
+    for ckpt in checkpoint_files:
+        try:
+            step_num = int(ckpt.split('_')[1].split('.')[0])
+            if step_num > max_step:
+                max_step = step_num
+                latest_checkpoint = ckpt
+        except (ValueError, IndexError):
+            continue
+    if not latest_checkpoint:
+        raise ValueError(f"Could not determine the latest checkpoint in {load_from_base_dir}")
+    print0(f"Loading base weights from latest checkpoint: {os.path.join(load_from_base_dir, latest_checkpoint)}")
+    model_data, _, _ = load_checkpoint(load_from_base_dir, max_step, device, load_optimizer=False, rank=ddp_rank)
+    model.load_state_dict(model_data, strict=False, assign=True)
+    del model_data
 
 # If we are resuming, overwrite the model parameters with those of the checkpoint
 base_dir = get_base_dir()
@@ -364,13 +389,21 @@ def get_lora_state_dict(model):
         wandb_run.log(log_data)
 
 
-# print a few more stats
-print0(f"Peak memory usage: {get_max_memory() / 1024 / 1024:.2f}MiB")
+ # print a few more stats (safe)
+peak_mem_mib = 0.0
+if device_type == "cuda" and torch.cuda.is_available():
+    try:
+        peak_mem_mib = torch.cuda.max_memory_reserved() / (1024 * 1024)
+    except Exception:
+        peak_mem_mib = 0.0
+print0(f"Peak memory usage: {peak_mem_mib:.2f}MiB")
 print0(f"Total training time: {total_training_time/60:.2f}m")
 print0(f"Minimum validation loss: {min_val_loss:.4f}") # changed from bpb
 
 # Log to report
 from nano_embed.report import get_report
+results = {}
+total_training_flops_est = num_flops_per_token * total_tokens
 get_report().log(section="MNTP model training", data=[ # changed section name
     user_config, # CLI args
     { # stats about the training setup
@@ -389,9 +422,9 @@ get_report().log(section="MNTP model training", data=[ # changed section name
         "Final validation loss": val_loss, # changed from bpb
         "CORE metric estimate": results.get("core_metric", None),
         "MFU %": f"{mfu:.2f}%",
-        "Total training flops": f"{flops_so_far:e}",
+        "Total training flops": f"{total_training_flops_est:e}",
         "Total training time": f"{total_training_time/60:.2f}m",
-        "Peak memory usage": f"{get_max_memory() / 1024 / 1024:.2f}MiB",
+        "Peak memory usage": f"{peak_mem_mib:.2f}MiB",
     }
 ])
 

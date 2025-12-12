@@ -3,6 +3,7 @@ Muon optimizer from Keller et al.
 Also a lot of borrowing of ideas from modded-nanogpt.
 """
 
+import os
 import torch
 from torch import Tensor
 import torch.distributed as dist
@@ -121,6 +122,7 @@ class DistMuon(torch.optim.Optimizer):
         nesterov: bool = True,
         ns_steps: int = 5,
     ):
+        print(f"[{os.getpid()}] DistMuon: __init__ start")
         defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, ns_steps=ns_steps)
         params = list(params)
         assert all(p.ndim == 2 for p in params), "Muon expects 2D parameters only"
@@ -130,7 +132,9 @@ class DistMuon(torch.optim.Optimizer):
             {p.shape for p in params}
         )  # sort to ensure consistent / deterministic ordering
         param_groups = []
-        for shape in shapes:
+        print(f"[{os.getpid()}] DistMuon: Grouping {len(shapes)} shapes")
+        for i, shape in enumerate(shapes):
+            print(f"[{os.getpid()}] DistMuon: Grouping shape {i+1}/{len(shapes)}: {shape}")
             group_params = [p for p in params if p.shape == shape]
             device, dtype = group_params[0].device, group_params[0].dtype
             assert all(p.device == device for p in group_params)
@@ -142,7 +146,9 @@ class DistMuon(torch.optim.Optimizer):
             param_groups.append(
                 dict(params=group_params, zero_buffer=torch.zeros_like(group_params[0]))
             )
+        print(f"[{os.getpid()}] DistMuon: Finished grouping parameters")
         super().__init__(param_groups, defaults)
+        print(f"[{os.getpid()}] DistMuon: __init__ end")
 
     @torch.no_grad()
     def step(self):

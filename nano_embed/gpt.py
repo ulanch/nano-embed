@@ -333,9 +333,20 @@ class GPT(nn.Module):
             if is_mntp:
                 # For MNTP, predict token i using representation at i-1
                 # Shift logits to the left and targets to the right
-                loss = F.cross_entropy(logits[:, :-1, :].contiguous().view(-1, logits.size(-1)), targets[:, 1:].contiguous().view(-1), ignore_index=-1, reduction=loss_reduction)
+                # Use -100 ignore_index to match dataloader masking
+                loss = F.cross_entropy(
+                    logits[:, :-1, :].contiguous().view(-1, logits.size(-1)),
+                    targets[:, 1:].contiguous().view(-1),
+                    ignore_index=-100,
+                    reduction=loss_reduction,
+                )
             else:
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1, reduction=loss_reduction)
+                loss = F.cross_entropy(
+                    logits.view(-1, logits.size(-1)),
+                    targets.view(-1),
+                    ignore_index=-100,
+                    reduction=loss_reduction,
+                )
             return loss
         else:
             # inference: just return the logits directly

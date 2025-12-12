@@ -15,6 +15,7 @@ from contextlib import nullcontext
 
 import wandb
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from nano_embed.gpt import GPT, GPTConfig
@@ -24,6 +25,7 @@ from nano_embed.tokenizer import get_tokenizer, get_token_bytes
 from nano_embed.checkpoint_manager import save_checkpoint, load_checkpoint
 from nano_embed.loss_eval import evaluate_bpb
 from nano_embed.engine import Engine
+import torch
 from nano_embed.contrastive_loss import ContrastiveLoss
 from scripts.base_eval import evaluate_model
 print_banner()
@@ -204,6 +206,12 @@ if resuming:
     del optimizer_data # free up the memory
 
 # -----------------------------------------------------------------------------
+# Output directories
+base_dir = get_base_dir()
+output_dirname = model_tag if model_tag else f"d{depth}_contrastive"
+checkpoint_dir = os.path.join(base_dir, "base_checkpoints", output_dirname)
+
+# -----------------------------------------------------------------------------
 # Initialize the DataLoaders for train/val
 tokens_dir = os.path.join(base_dir, "tokenized_data")
 dataloader_resume_state_dict = None if not resuming else meta_data["dataloader_state_dict"]
@@ -325,10 +333,23 @@ def get_lora_state_dict(model):
     t0 = time.time()
     for micro_step in range(grad_accum_steps):
         with autocast_ctx:
-            # SimCSE: pass the same input twice to get two different embeddings with different dropout masks
-            embeddings_a = model(x, return_embeddings=True).mean(dim=1)
-            embeddings_b = model(x, return_embeddings=True).mean(dim=1)
+            # SimCSE: create two different views with independent dropout noise
+            hidden = model(x, return_embeddings=True)
+            # Masked mean pooling to ignore padding tokens (id == 0)
+            attn = (x != 0).unsqueeze(-1).expand_as(hidden)
+            # Apply dropout to create two different stochastic views
+            hidden_a = F.dropout(hidden, p=0.1, training=True)
+            hidden_b = F.dropout(hidden, p=0.1, training=True)
+            sum_a = (hidden_a * attn).sum(dim=1)
+            sum_b = (hidden_b * attn).sum(dim=1)
+            denom = torch.clamp(attn.sum(dim=1), min=1e-9)
+            embeddings_a = sum_a / denom
+            embeddings_b = sum_b / denom
             loss = contrastive_loss_fn(embeddings_a, embeddings_b)
+        train_loss = loss.detach()
+        loss = loss / grad_accum_steps
+        loss.backward()
+        x, y, dataloader_state_dict = next(train_loader)
     # gradient clipping
     grad_clip_enabled = grad_clip > 0.0
     if grad_clip_enabled:
@@ -380,13 +401,21 @@ def get_lora_state_dict(model):
         wandb_run.log(log_data)
 
 
-# print a few more stats
-print0(f"Peak memory usage: {get_max_memory() / 1024 / 1024:.2f}MiB")
+ # print a few more stats (safe)
+peak_mem_mib = 0.0
+if device_type == "cuda" and torch.cuda.is_available():
+    try:
+        peak_mem_mib = torch.cuda.max_memory_reserved() / (1024 * 1024)
+    except Exception:
+        peak_mem_mib = 0.0
+print0(f"Peak memory usage: {peak_mem_mib:.2f}MiB")
 print0(f"Total training time: {total_training_time/60:.2f}m")
 print0(f"Minimum validation loss: {min_val_loss:.4f}") # changed from bpb
 
 # Log to report
 from nano_embed.report import get_report
+results = {}
+total_training_flops_est = num_flops_per_token * total_tokens
 get_report().log(section="Contrastive model training", data=[ # changed section name
     user_config, # CLI args
     { # stats about the training setup
@@ -405,9 +434,9 @@ get_report().log(section="Contrastive model training", data=[ # changed section 
         "Final validation loss": val_loss, # changed from bpb
         "CORE metric estimate": results.get("core_metric", None),
         "MFU %": f"{mfu:.2f}%",
-        "Total training flops": f"{flops_so_far:e}",
+        "Total training flops": f"{total_training_flops_est:e}",
         "Total training time": f"{total_training_time/60:.2f}m",
-        "Peak memory usage": f"{get_max_memory() / 1024 / 1024:.2f}MiB",
+        "Peak memory usage": f"{peak_mem_mib:.2f}MiB",
     }
 ])
 

@@ -35,7 +35,10 @@ class LoRALinear(nn.Module):
         return self.linear.weight
 
     def merge_lora_weights(self):
-        self.linear.weight.data += self.lora.lora_b @ self.lora.lora_a * self.lora.alpha
+        # Effective LoRA weight delta is (A @ B), where A: (in, r), B: (r, out)
+        # nn.Linear stores weights as (out, in), so add the transpose
+        delta = (self.lora.lora_a @ self.lora.lora_b).T * self.lora.alpha
+        self.linear.weight.data += delta
         return self.linear
 
 
